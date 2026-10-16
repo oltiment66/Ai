@@ -1,0 +1,6 @@
+@import "@videojs/react/video/skin.css";
+
+:where(.ck-video) {
+  --media-border-radius: var(--radius, 16px);
+  font-family: inherit;
+}
