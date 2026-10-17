@@ -18,6 +18,26 @@ SECTIONS = {"chat": "💬 چت هوش مصنوعی", "image": "🎨 ساخت ع�
 SEC_ICON = {"chat": "💬", "image": "🎨", "video": "🎬"}
 SEC_STYLE = {"chat": "primary", "image": "success", "video": "danger"}
 
+# Friendly names shown in the model picker. They are labels, not fake providers:
+# a name becomes usable after the admin connects a matching model/API.
+AI_BRANDS = [
+    ("ChatGPT", "🤖"),
+    ("Claude", "🟠"),
+    ("Command", "🟣"),
+    ("Gemini", "♊"),
+    ("Aya", "🌐"),
+    ("ParsiGPT", "🇮🇷"),
+    ("DeepSeek", "🐋"),
+    ("LLaMA", "🦙"),
+    ("NVIDIA AI", "🟢"),
+    ("Plugsky", "⚡"),
+    ("Qwen3", "🟣"),
+    ("Ornith", "🦜"),
+    ("Memotron", "🧠"),
+    ("Seed", "🌱"),
+    ("MiMo", "✨"),
+]
+
 # provider presets: key -> (name, kind, base_url, [(section, model_id, title), ...])
 PRESETS = {
     "uno": ("UnoRouter", "openai", "https://api.unorouter.com/v1", [
@@ -167,6 +187,31 @@ def current_model(uid, sec):
     return models[0]
 
 
+def brand_for_model(m):
+    hay = f"{m.get('title', '')} {m.get('model_id', '')}".lower()
+    aliases = {
+        "ChatGPT": ("chatgpt", "gpt-"),
+        "Claude": ("claude",),
+        "Command": ("command", "cohere"),
+        "Gemini": ("gemini",),
+        "Aya": ("aya",),
+        "ParsiGPT": ("parsigpt", "parsi"),
+        "DeepSeek": ("deepseek",),
+        "LLaMA": ("llama", "meta-llama"),
+        "NVIDIA AI": ("nvidia", "nemotron"),
+        "Plugsky": ("plugsky",),
+        "Qwen3": ("qwen",),
+        "Ornith": ("ornith",),
+        "Memotron": ("memotron",),
+        "Seed": ("seed",),
+        "MiMo": ("mimo",),
+    }
+    for name, words in aliases.items():
+        if any(w in hay for w in words):
+            return name
+    return None
+
+
 # ======================= users / access =======================
 async def ensure_user(bot, frm):
     uid = frm["id"]
@@ -252,7 +297,7 @@ async def open_section(bot, uid, sec, mid=None, note=""):
         txt = f"{SECTIONS[sec]}\n\n⚠️ هنوز هیچ مدلی برای این بخش فعال نشده."
         if is_admin(uid):
             txt += "\n🛠 از پنل مدیریت ← مدل‌ها، یه مدل اضافه کن."
-        return await show(bot, uid, mid, txt, kb(HOME))
+        return await show(bot, uid, mid, txt, section_kb(sec))
     lim = int(db.get_setting(f"limit_{sec}") or 0)
     lim_txt = ""
     if lim and not is_admin(uid):
@@ -263,15 +308,28 @@ async def open_section(bot, uid, sec, mid=None, note=""):
 
 async def pick_model(bot, uid, sec, mid):
     models = db.list_models(sec, enabled_only=True)
-    if not models:
-        return await open_section(bot, uid, sec, mid)
     cur = current_model(uid, sec)
     rows = []
-    for m in models:
+    # Keep the requested AI names in a consistent, vertical layout. Only names
+    # backed by an enabled model are selectable; the rest are clearly marked.
+    for brand, icon in AI_BRANDS:
+        matches = [m for m in models if brand_for_model(m) == brand]
+        if matches:
+            for m in matches:
+                mark = "✅ " if cur and m["id"] == cur["id"] else ""
+                rows.append([btn(f"{mark}{icon} {brand} · {m['title']}", f"sel:{m['id']}",
+                                 "success" if mark else None)])
+        else:
+            rows.append([btn(f"▫️ {icon} {brand} · تنظیم نشده", f"brand:{sec}:{brand}", None)])
+    other = [m for m in models if not brand_for_model(m)]
+    for m in other:
         mark = "✅ " if cur and m["id"] == cur["id"] else ""
-        rows.append([btn(f"{mark}{m['title']}", f"sel:{m['id']}", "success" if mark else None)])
+        rows.append([btn(f"{mark}🔌 {m['title']}", f"sel:{m['id']}", "success" if mark else None)])
     rows.append([btn("🔙 برگشت", f"m:{sec}")])
-    await show(bot, uid, mid, f"{SEC_ICON[sec]} <b>انتخاب مدل</b>\n\nیکی رو انتخاب کن 👇", kb(*rows))
+    await show(bot, uid, mid,
+               f"{SEC_ICON[sec]} <b>انتخاب هوش مصنوعی</b>\n\n"
+               "مدل‌هایی که مدیر وصل کرده قابل انتخاب‌اند؛ موارد «تنظیم نشده» باید از پنل مدیر اضافه شوند 👇",
+               kb(*rows))
 
 
 async def account(bot, uid, mid):
@@ -374,6 +432,10 @@ async def on_callback(bot, cq):
         return await open_section(bot, uid, "chat", mid, note="🧹 حافظه چت پاک شد.\n\n")
     if data.startswith("pick:"):
         return await pick_model(bot, uid, data[5:], mid)
+    if data.startswith("brand:"):
+        _, sec, brand = data.split(":", 2)
+        return await bot.send(uid, f"▫️ <b>{e(brand)}</b> هنوز برای {SECTIONS[sec]} تنظیم نشده.\n"
+                                  "مدیر باید API و Model ID این سرویس را از پنل مدیریت اضافه کند.", kb(HOME))
     if data.startswith("sel:"):
         m = db.get_model(int(data[4:]))
         if m:
@@ -854,14 +916,27 @@ async def admin_cb(bot, uid, mid, d):
         if not provs:
             return await show(bot, uid, mid, "⚠️ اول باید یه سرویس (API Key) اضافه کنی.",
                               kb([btn("➕ افزودن سرویس", "ad:padd", "success")], [btn("🔙 برگشت", f"ad:ms:{arg}")]))
-        rows = [[btn(f"🔌 {p['name']}", f"ad:mp:{arg}:{p['id']}")] for p in provs]
+        rows = [[btn(f"{icon} {brand}", f"ad:mb:{arg}:{i}", SEC_STYLE[arg])]
+                for i, (brand, icon) in enumerate(AI_BRANDS)]
         rows.append([btn("🔙 برگشت", f"ad:ms:{arg}")])
-        return await show(bot, uid, mid, f"{SECTIONS[arg]}\n\nمدل از کدوم سرویسه؟", kb(*rows))
+        return await show(bot, uid, mid,
+                          f"{SECTIONS[arg]}\n\nاول اسم هوش مصنوعی را انتخاب کن، بعد سرویس و Model ID را می‌گیریم:",
+                          kb(*rows))
+    if cmd == "mb":
+        sec, brand_i = arg, int(parts[2])
+        brand, icon = AI_BRANDS[brand_i]
+        rows = [[btn(f"🔌 {p['name']}", f"ad:mp:{sec}:{p['id']}:{brand_i}")] for p in db.list_providers()]
+        rows.append([btn("🔙 انتخاب هوش مصنوعی", f"ad:madd:{sec}")])
+        return await show(bot, uid, mid, f"{icon} <b>{e(brand)}</b>\n\nمدل از کدوم سرویسه؟", kb(*rows))
     if cmd == "mp":
         sec, pid = arg, int(parts[2])
-        set_state(uid, "m_id", sec=sec, pid=pid)
+        brand_i = int(parts[3]) if len(parts) > 3 else None
+        brand = AI_BRANDS[brand_i][0] if brand_i is not None else None
+        set_state(uid, "m_id", sec=sec, pid=pid, brand=brand)
         ex = {"chat": "deepseek-v4-flash:free", "image": "seedream-4-0-250828", "video": "seedance-1-0-pro-250528"}[sec]
-        return await show(bot, uid, mid, f"🏷 <b>Model ID</b> رو دقیق بفرست.\nمثال: <code>{ex}</code>\n\n💡 تو BytePlus می‌تونی Endpoint ID (مثل <code>ep-2025...</code>) هم بدی.", CANCEL)
+        return await show(bot, uid, mid, f"🏷 <b>Model ID</b> مربوط به {e(brand or 'این مدل')} رو دقیق بفرست.\n"
+                                         f"مثال: <code>{ex}</code>\n\n"
+                                         "💡 تو BytePlus می‌تونی Endpoint ID (مثل <code>ep-2025...</code>) هم بدی.", CANCEL)
     if cmd == "mv":
         return await model_view(bot, uid, mid, int(arg))
     if cmd == "mdef":
@@ -1017,9 +1092,13 @@ async def admin_input(bot, msg, st):
         return await prov_view(bot, uid, None, d["pid"], "🌐 آدرس عوض شد.\n\n")
     if s == "m_id":
         set_state(uid, "m_title", model_id=text)
-        return await bot.send(uid, f"✏️ اسم نمایشی مدل رو بفرست (مثلا <code>🐋 DeepSeek V4</code>)\nیا <code>-</code> بفرست تا همون <code>{e(text)}</code> بمونه.", CANCEL)
+        brand_icon = next((icon for name, icon in AI_BRANDS if name == d.get("brand")), "🤖")
+        default_title = f"{brand_icon} {d.get('brand')}" if d.get("brand") else text
+        return await bot.send(uid, f"✏️ اسم نمایشی مدل رو بفرست (پیشنهاد: <code>{e(default_title)}</code>)\n"
+                                   f"یا <code>-</code> بفرست تا اسم پیشنهادی ثبت بشه.", CANCEL)
     if s == "m_title":
-        title = d["model_id"] if text == "-" else text[:60]
+        title = (f"{next((icon for name, icon in AI_BRANDS if name == d.get('brand')), '🤖')} {d['brand']}"
+                  if text == "-" and d.get("brand") else (d["model_id"] if text == "-" else text[:60]))
         mid_ = db.add_model(d["sec"], d["pid"], d["model_id"], title)
         return await model_view(bot, uid, None, mid_, "✅ مدل اضافه شد.\n\n")
     if s == "m_ren":
