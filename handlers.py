@@ -279,7 +279,7 @@ async def show_main(bot, uid, mid=None, name=""):
 
 
 def section_kb(sec):
-    rows = [[btn("🔄 انتخاب مدل", f"pick:{sec}", "primary")]]
+    rows = [[btn("🔄 تغییر هوش مصنوعی", f"pick:{sec}", "primary")]]
     if sec == "chat":
         rows.append([btn("🧹 شروع چت جدید", "m:newchat", "danger")])
     rows.append(HOME)
@@ -312,28 +312,38 @@ async def open_section(bot, uid, sec, mid=None, note=""):
 
 async def pick_model(bot, uid, sec, mid):
     models = db.list_models(sec, enabled_only=True)
-    cur = current_model(uid, sec)
     rows = []
-    # Keep the requested AI names in a consistent, vertical layout. Only names
-    # backed by an enabled model are selectable; the rest are clearly marked.
-    for brand, icon in AI_BRANDS:
-        matches = [m for m in models if brand_for_model(m) == brand]
-        if matches:
-            for m in matches:
-                mark = "✅ " if cur and m["id"] == cur["id"] else ""
-                rows.append([btn(f"{mark}{icon} {brand} · {m['title']}", f"sel:{m['id']}",
-                                 "success" if mark else None)])
-        else:
-            rows.append([btn(f"▫️ {icon} {brand} · تنظیم نشده", f"brand:{sec}:{brand}", None)])
-    other = [m for m in models if not brand_for_model(m)]
-    for m in other:
-        mark = "✅ " if cur and m["id"] == cur["id"] else ""
-        rows.append([btn(f"{mark}🔌 {m['title']}", f"sel:{m['id']}", "success" if mark else None)])
+    # Two-column zig-zag layout: compact on phones, with every requested AI
+    # always visible even before the admin connects a model.
+    for i in range(0, len(AI_BRANDS), 2):
+        pair = AI_BRANDS[i:i + 2]
+        buttons = [btn(f"{icon} {brand}", f"brand:{sec}:{brand}", "primary")
+                   for brand, icon in pair]
+        rows.append(buttons[::-1] if (i // 2) % 2 else buttons)
     rows.append([btn("🔙 برگشت", f"m:{sec}")])
     await show(bot, uid, mid,
-               f"{SEC_ICON[sec]} <b>انتخاب هوش مصنوعی</b>\n\n"
-               "مدل‌هایی که مدیر وصل کرده قابل انتخاب‌اند؛ موارد «تنظیم نشده» باید از پنل مدیر اضافه شوند 👇",
+               f"{SEC_ICON[sec]} <b>هوش مصنوعی را انتخاب کن</b>\n\n"
+               "روی نام هر هوش مصنوعی بزن تا همه نسخه‌های همان سرویس را ببینی 👇",
                kb(*rows))
+
+
+async def brand_models(bot, uid, sec, brand, mid):
+    models = [m for m in db.list_models(sec, enabled_only=True)
+              if brand_for_model(m) == brand]
+    icon = next((i for n, i in AI_BRANDS if n == brand), "🤖")
+    rows = []
+    cur = current_model(uid, sec)
+    for m in models:
+        mark = "✅ " if cur and cur["id"] == m["id"] else ""
+        rows.append([btn(f"{mark}{icon} {m['title']}", f"sel:{m['id']}",
+                         "success" if mark else "primary")])
+    rows.append([btn("🔙 برگشت به هوش‌های مصنوعی", f"pick:{sec}")])
+    text = f"{icon} <b>{e(brand)}</b>\n\n"
+    if models:
+        text += "نسخه موردنظرت را انتخاب کن 👇"
+    else:
+        text += "هنوز نسخه‌ای از این هوش مصنوعی برای این بخش توسط مدیر اضافه نشده."
+    await show(bot, uid, mid, text, kb(*rows))
 
 
 async def account(bot, uid, mid):
@@ -426,7 +436,7 @@ async def on_callback(bot, cq):
     if data == "m:home":
         return await show_main(bot, uid, mid, cq["from"].get("first_name", ""))
     if data in ("m:chat", "m:image", "m:video"):
-        return await open_section(bot, uid, data[2:], mid)
+        return await pick_model(bot, uid, data[2:], mid)
     if data == "m:me":
         return await account(bot, uid, mid)
     if data == "m:help":
@@ -438,8 +448,7 @@ async def on_callback(bot, cq):
         return await pick_model(bot, uid, data[5:], mid)
     if data.startswith("brand:"):
         _, sec, brand = data.split(":", 2)
-        return await bot.send(uid, f"▫️ <b>{e(brand)}</b> هنوز برای {SECTIONS[sec]} تنظیم نشده.\n"
-                                  "مدیر باید API و Model ID این سرویس را از پنل مدیریت اضافه کند.", kb(HOME))
+        return await brand_models(bot, uid, sec, brand, mid)
     if data.startswith("sel:"):
         m = db.get_model(int(data[4:]))
         if m:
