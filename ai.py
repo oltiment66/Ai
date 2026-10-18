@@ -6,7 +6,7 @@ may expose its API at the root, under /v1, or behind another path.
 import asyncio
 import base64
 import time
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -19,7 +19,18 @@ class AIError(Exception):
 
 
 def _url(p, path):
-    return p["base_url"].rstrip("/") + path
+    return _service_base(p) + path
+
+
+def _service_base(p):
+    """Normalize known token-based gateways without changing saved settings."""
+    base = p["base_url"].rstrip("/")
+    host = (urlparse(base).hostname or "").lower()
+    if "pollinations.ai" in host:
+        # api.pollinations.ai/generate is the legacy gateway. The current
+        # authenticated API is OpenAI-compatible under gen.pollinations.ai/v1.
+        return "https://gen.pollinations.ai/v1"
+    return base
 
 
 def _candidate_urls(p, path):
@@ -28,7 +39,7 @@ def _candidate_urls(p, path):
     This keeps existing providers untouched while allowing token endpoints
     that were copied without the /v1 suffix.
     """
-    base = p["base_url"].rstrip("/")
+    base = _service_base(p)
     first = base + path
     yield first
     parsed = urlparse(base)
@@ -145,6 +156,9 @@ def _data_url_to_bytes(u):
 
 
 async def image(p, model, prompt, size="auto"):
+    if "pollinations.ai" in (urlparse(p["base_url"]).hostname or "").lower():
+        query = f"?model={quote(model)}"
+        return [await _request("GET", p, f"/image/{quote(prompt)}{query}", raw=True)]
     if p.get("kind") == "runway":
         j = await _request("POST", p, "/text_to_image", {
             "promptText": prompt, "ratio": "1024:1024", "model": model})
