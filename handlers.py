@@ -4,6 +4,7 @@ import html
 import logging
 import re
 import time
+from urllib.parse import urlparse
 
 import httpx
 
@@ -60,6 +61,8 @@ PRESETS = {
     "together": ("Together AI", "openai", "https://api.together.xyz/v1", []),
     "mistral": ("Mistral", "openai", "https://api.mistral.ai/v1", []),
     "xai": ("xAI Grok", "openai", "https://api.x.ai/v1", []),
+    "runway": ("Runway", "runway", "https://api.dev.runwayml.com/v1", []),
+    "cloudflare": ("Cloudflare Workers AI", "cloudflare", "https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/run", []),
 }
 
 STATE = {}        # uid -> {"s": state, "d": data}   (admin wizards)
@@ -1131,12 +1134,16 @@ async def admin_input(bot, msg, st):
         set_state(uid, "p_url", name=text[:40])
         return await bot.send(uid, "🌐 Base URL رو بفرست.\nمثال: <code>https://api.example.com/v1</code>", CANCEL)
     if s == "p_url":
-        if not text.startswith("http"):
-            return await bot.send(uid, "⚠️ آدرس باید با http شروع بشه.", CANCEL)
+        parsed = urlparse(text.strip())
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme != "https" or not host or host in {"localhost", "127.0.0.1"}:
+            return await bot.send(uid, "⚠️ فقط Base URL معتبر HTTPS بفرست؛ مثل https://api.unorouter.com/v1", CANCEL)
         set_state(uid, "p_kind", url=text)
         return await bot.send(uid, "📡 نوع API؟", kb(
             [btn("🔵 OpenAI-compatible (بیشتر سرویس‌ها)", "ad:pk:openai", "primary")],
             [btn("🟣 BytePlus ModelArk", "ad:pk:byteplus")],
+            [btn("🎬 Runway Native API", "ad:pk:runway")],
+            [btn("☁️ Cloudflare Workers AI", "ad:pk:cloudflare")],
             [btn("❌ لغو", "ad:cancel", "danger")]))
     if s == "p_key":
         await bot.delete(uid, msg["message_id"])
@@ -1158,8 +1165,9 @@ async def admin_input(bot, msg, st):
         db.update_provider(d["pid"], api_key=text)
         return await prov_view(bot, uid, None, d["pid"], "🔑 کلید عوض شد 🔒\n\n")
     if s == "purl_edit":
-        if not text.startswith("http"):
-            return await bot.send(uid, "⚠️ آدرس باید با http شروع بشه.", CANCEL)
+        parsed = urlparse(text.strip())
+        if parsed.scheme != "https" or not parsed.hostname:
+            return await bot.send(uid, "⚠️ فقط Base URL معتبر HTTPS بفرست.", CANCEL)
         db.update_provider(d["pid"], base_url=text.rstrip("/"))
         return await prov_view(bot, uid, None, d["pid"], "🌐 آدرس عوض شد.\n\n")
     if s == "m_id":

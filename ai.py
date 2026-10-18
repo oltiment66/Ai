@@ -1,10 +1,12 @@
 """AI provider adapters.
-kind='openai'   -> any OpenAI-compatible API (UnoRouter, OpenAI, OpenRouter, Gemini, DeepSeek, Groq, ...)
-kind='byteplus' -> BytePlus ModelArk (chat is OpenAI-compatible, plus Seedream images & Seedance video tasks)
+The original OpenAI-compatible and BytePlus paths stay intact. Extra adapters
+are intentionally opt-in per provider: Runway and Cloudflare use their native
+payloads instead of pretending to be OpenAI-compatible.
 """
 import asyncio
 import base64
 import time
+from urllib.parse import urlparse
 
 import httpx
 
@@ -21,7 +23,10 @@ def _url(p, path):
 
 
 def _headers(p):
-    return {"Authorization": f"Bearer {p['api_key']}", "Content-Type": "application/json"}
+    h = {"Authorization": f"Bearer {p['api_key']}", "Content-Type": "application/json"}
+    if p.get("kind") == "runway":
+        h["X-Runway-Version"] = "2024-11-06"
+    return h
 
 
 def _err(r):
@@ -60,6 +65,8 @@ async def _request(method, p, path, body=None, raw=False):
 
 
 async def list_models(p):
+    if p.get("kind") in ("runway", "cloudflare"):
+        raise AIError("این سرویس فهرست مدل خودکار ندارد؛ Model ID را دستی اضافه کن.")
     j = await _request("GET", p, "/models")
     data = j.get("data", j) if isinstance(j, dict) else j
     ids = []
@@ -77,6 +84,13 @@ def _content_text(content):
 
 
 async def chat(p, model, messages):
+    if p.get("kind") == "cloudflare":
+        j = await _request("POST", p, f"/{model.lstrip('/')}", {"messages": messages})
+        result = j.get("result", j) if isinstance(j, dict) else j
+        text = result.get("response", result.get("text", "")) if isinstance(result, dict) else str(result)
+        if text:
+            return str(text).strip()
+        raise AIError(str(j)[:300])
     j = await _request("POST", p, "/chat/completions", {"model": model, "messages": messages})
     try:
         msg = j["choices"][0]["message"]
@@ -107,6 +121,10 @@ def _data_url_to_bytes(u):
 
 
 async def image(p, model, prompt, size="auto"):
+    if p.get("kind") == "runway":
+        j = await _request("POST", p, "/text_to_image", {
+            "promptText": prompt, "ratio": "1024:1024", "model": model})
+        return await _runway_result(p, j, "image")
     if p["kind"] == "byteplus":
         body = {"model": model, "prompt": prompt, "response_format": "url", "watermark": False,
                 "size": "2K" if size in ("", "auto") else size}
@@ -147,6 +165,17 @@ async def image(p, model, prompt, size="auto"):
 
 async def video(p, model, prompt, params="", progress=None, max_wait=900):
     start = time.time()
+    if p.get("kind") == "runway":
+        # Runway's image_to_video requires a prompt image. Generate one through
+        # the same provider first, then use its returned URI as the keyframe.
+        imgs = await image(p, "gen4_image_turbo", prompt)
+        image_uri = next((x for x in imgs if isinstance(x, str) and x.startswith("http")), None)
+        if not image_uri:
+            raise AIError("Runway تصویر مرجع قابل استفاده برای ویدیو برنگرداند")
+        j = await _request("POST", p, "/image_to_video", {
+            "promptText": prompt, "promptImage": image_uri,
+            "ratio": "1280:720", "duration": 2, "outputFormat": "mp4", "model": model})
+        return await _runway_result(p, j, "video", progress=progress, max_wait=max_wait)
     if p["kind"] == "byteplus":
         text = (prompt + " " + params).strip() if params else prompt
         j = await _request("POST", p, "/contents/generations/tasks",
@@ -188,3 +217,27 @@ async def video(p, model, prompt, params="", progress=None, max_wait=900):
             e = s.get("error") or {}
             raise AIError(f"ساخت ویدیو ناموفق: {e.get('message', st) if isinstance(e, dict) else e}")
     raise AIError("زمان ساخت ویدیو طولانی شد (timeout)")
+
+
+async def _runway_result(p, task, kind, progress=None, max_wait=900):
+    """Poll a native Runway task and return its media URL."""
+    tid = task.get("id") if isinstance(task, dict) else None
+    if not tid:
+        raise AIError(str(task)[:300])
+    started = time.time()
+    while time.time() - started < max_wait:
+        await asyncio.sleep(5)
+        s = await _request("GET", p, f"/tasks/{tid}")
+        status = str(s.get("status", "")).lower()
+        if progress:
+            await progress(status, int(time.time() - started))
+        if status in ("succeeded", "completed"):
+            out = s.get("output") or s.get("outputs") or []
+            if isinstance(out, str):
+                return out
+            if isinstance(out, list) and out:
+                return out[0] if kind == "video" else out
+            raise AIError("Runway کار تمام شد ولی لینک خروجی برنگشت")
+        if status in ("failed", "cancelled", "canceled"):
+            raise AIError(f"Runway task ناموفق شد: {s.get('failure', status)}")
+    raise AIError("زمان پاسخ Runway طولانی شد (timeout)")
