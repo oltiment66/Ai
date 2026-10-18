@@ -40,6 +40,16 @@ AI_BRANDS = [
     ("MiMo", "✨"),
 ]
 
+
+def all_brands():
+    """Built-in folders plus folders created by the administrator."""
+    out = list(AI_BRANDS)
+    known = {name for name, _ in out}
+    for row in db.list_brands():
+        if row["name"] not in known:
+            out.append((row["name"], row["icon"]))
+    return out
+
 # provider presets: key -> (name, kind, base_url, [(section, model_id, title), ...])
 PRESETS = {
     "uno": ("UnoRouter", "openai", "https://api.unorouter.com/v1", [
@@ -311,16 +321,27 @@ async def open_section(bot, uid, sec, mid=None, note=""):
     await show(bot, uid, mid, txt, section_kb(sec))
 
 
-async def pick_model(bot, uid, sec, mid):
-    models = db.list_models(sec, enabled_only=True)
+async def pick_model(bot, uid, sec, mid, page=0):
     rows = []
     # Two-column zig-zag layout: compact on phones, with every requested AI
     # always visible even before the admin connects a model.
-    for i in range(0, len(AI_BRANDS), 2):
-        pair = AI_BRANDS[i:i + 2]
+    brands = all_brands()
+    per_page = 8
+    pages = max(1, (len(brands) + per_page - 1) // per_page)
+    page = max(0, min(page, pages - 1))
+    shown = brands[page * per_page:(page + 1) * per_page]
+    for i in range(0, len(shown), 2):
+        pair = shown[i:i + 2]
         buttons = [btn(f"{icon} {brand}", f"brand:{sec}:{brand}", "primary")
                    for brand, icon in pair]
         rows.append(buttons[::-1] if (i // 2) % 2 else buttons)
+    nav = []
+    if page > 0:
+        nav.append(btn("⬅️ قبلی", f"pickp:{sec}:{page - 1}"))
+    nav.append(btn(f"📄 {page + 1}/{pages}", "noop"))
+    if page < pages - 1:
+        nav.append(btn("بعدی ➡️", f"pickp:{sec}:{page + 1}"))
+    rows.append(nav)
     rows.append([btn("🔙 برگشت", f"m:{sec}")])
     await show(bot, uid, mid,
                f"{SEC_ICON[sec]} <b>هوش مصنوعی را انتخاب کن</b>\n\n"
@@ -335,7 +356,7 @@ async def brand_models(bot, uid, sec, brand, mid):
 async def brand_models_page(bot, uid, sec, brand, mid, page=0):
     models = [m for m in db.list_models(sec, enabled_only=True)
               if brand_for_model(m) == brand]
-    icon = next((i for n, i in AI_BRANDS if n == brand), "🤖")
+    icon = next((i for n, i in all_brands() if n == brand), "🤖")
     rows = []
     cur = current_model(uid, sec)
     per_page = 8
@@ -456,7 +477,7 @@ async def on_callback(bot, cq):
     if data == "m:home":
         return await show_main(bot, uid, mid, cq["from"].get("first_name", ""))
     if data in ("m:chat", "m:image", "m:video"):
-        return await pick_model(bot, uid, data[2:], mid)
+        return await pick_model(bot, uid, data[2:], mid, 0)
     if data == "m:me":
         return await account(bot, uid, mid)
     if data == "m:help":
@@ -467,7 +488,10 @@ async def on_callback(bot, cq):
         HISTORY.pop(uid, None)
         return await open_section(bot, uid, "chat", mid, note="🧹 حافظه چت پاک شد.\n\n")
     if data.startswith("pick:"):
-        return await pick_model(bot, uid, data[5:], mid)
+        return await pick_model(bot, uid, data[5:], mid, 0)
+    if data.startswith("pickp:"):
+        _, sec, page = data.split(":", 2)
+        return await pick_model(bot, uid, sec, mid, int(page))
     if data.startswith("brandp:"):
         _, sec, brand, page = data.split(":", 3)
         return await brand_models_page(bot, uid, sec, brand, mid, int(page))
@@ -685,7 +709,8 @@ def fetched_kb(d):
     for i in range(page * per, min(len(view), (page + 1) * per)):
         mid_ = view[i]
         ok = i in d.get("tested", set())
-        mark = "✅ " if ok else ""
+        bad = i in d.get("failed", set())
+        mark = "✅ " if ok else ("❌ " if bad else "")
         rows.append([btn(f"{mark}{SEC_ICON[guess_section(mid_)]} {mid_[:50]}", f"ad:fa:{i}")])
         rows.append([btn("🧪 تست مدل" if not ok else "✅ تست موفق", f"ad:ft:{i}",
                          "success" if ok else "primary")])
@@ -696,6 +721,7 @@ def fetched_kb(d):
     if page < pages - 1:
         nav.append(btn("بعدی ➡️", f"ad:fp:{page + 1}"))
     rows.append(nav)
+    rows.append([btn("🧪 تست همه مدل‌ها", "ad:fall", "success")])
     rows.append([btn("🔙 برگشت به سرویس", f"ad:pv:{d['pid']}")])
     return kb(*rows)
 
@@ -713,16 +739,28 @@ async def show_fetched(bot, uid, mid, note=""):
 async def models_home(bot, uid, mid):
     clear_state(uid)
     rows = [[btn(f"{SECTIONS[s]} ({len(db.list_models(s))})", f"ad:ms:{s}", SEC_STYLE[s])] for s in SECTIONS]
+    rows.append([btn("➕ ساخت دکمه هوش مصنوعی", "ad:badd", "success")])
     rows.append([btn("🔙 پنل مدیریت", "ad:home")])
     await show(bot, uid, mid, "🤖 <b>مدیریت مدل‌ها</b>\n\nبخش رو انتخاب کن:", kb(*rows))
 
 
-async def models_sec(bot, uid, mid, sec, note=""):
+async def models_sec(bot, uid, mid, sec, note="", page=0):
     clear_state(uid)
     rows = []
-    for m in db.list_models(sec):
+    models = db.list_models(sec)
+    per_page = 8
+    pages = max(1, (len(models) + per_page - 1) // per_page)
+    page = max(0, min(page, pages - 1))
+    for m in models[page * per_page:(page + 1) * per_page]:
         icon = "⭐️" if m["is_default"] else ("🟢" if m["enabled"] and m["p_enabled"] else "🔴")
         rows.append([btn(f"{icon} {m['title']} · {m['p_name']}", f"ad:mv:{m['id']}")])
+    nav = []
+    if page > 0:
+        nav.append(btn("⬅️ قبلی", f"ad:msp:{sec}:{page - 1}"))
+    nav.append(btn(f"📄 {page + 1}/{pages}", "ad:noop"))
+    if page < pages - 1:
+        nav.append(btn("بعدی ➡️", f"ad:msp:{sec}:{page + 1}"))
+    rows.append(nav)
     rows.append([btn("➕ افزودن مدل", f"ad:madd:{sec}", "success")])
     rows.append([btn("🔙 مدل‌ها", "ad:models")])
     txt = f"{note}{SECTIONS[sec]} <b>· مدل‌ها</b>\n\n⭐️ پیش‌فرض | 🟢 فعال | 🔴 غیرفعال"
@@ -740,6 +778,7 @@ async def model_view(bot, uid, mid, model_id, note=""):
     rows = [[btn("⭐️ پیش‌فرض کن", f"ad:mdef:{model_id}", "success"),
              btn("⏯ غیرفعال کن" if m["enabled"] else "⏯ فعال کن", f"ad:mtg:{model_id}")],
             [btn("✏️ تغییر نام", f"ad:mren:{model_id}"), btn("🏷 تغییر Model ID", f"ad:mmid:{model_id}")]]
+    rows.append([btn("📁 انتقال به پوشه هوش مصنوعی", f"ad:mf:{model_id}")])
     if m["section"] == "chat":
         rows.append([btn("🧪 تست مدل", f"ad:mtest:{model_id}", "primary")])
     rows.append([btn("🗑 حذف", f"ad:mdel:{model_id}", "danger")])
@@ -932,7 +971,7 @@ async def admin_cb(bot, uid, mid, d):
             return await prov_list(bot, uid, mid)
         model_id = st["d"]["view"][int(arg)]
         rows = [[btn(f"{icon} {brand}", f"ad:fb:{arg}:{i}", "primary")]
-                for i, (brand, icon) in enumerate(AI_BRANDS)]
+                for i, (brand, icon) in enumerate(all_brands())]
         rows.append([btn("🔙 برگشت به لیست", f"ad:fp:{st['d'].get('page', 0)}")])
         return await show(bot, uid, mid, f"🏷 <code>{e(model_id)}</code>\n\n"
                                          "این مدل زیر کدوم دکمه هوش مصنوعی قرار بگیره؟", kb(*rows))
@@ -946,7 +985,7 @@ async def admin_cb(bot, uid, mid, d):
                      f"ad:fs:{arg}:{s}:{brand_i}", SEC_STYLE[s])] for s in SECTIONS]
         rows.append([btn("🔙 انتخاب هوش مصنوعی", f"ad:fa:{arg}")])
         return await show(bot, uid, mid, f"🏷 <code>{e(model_id)}</code>\n\n"
-                                         f"هوش مصنوعی: <b>{e(AI_BRANDS[brand_i][0])}</b>\n\n"
+                                         f"هوش مصنوعی: <b>{e(all_brands()[brand_i][0])}</b>\n\n"
                                          "مدل در کدوم بخش هم فعال بشه؟", kb(*rows))
     if cmd == "ft":
         st = STATE.get(uid)
@@ -964,14 +1003,29 @@ async def admin_cb(bot, uid, mid, d):
             note = f"✅ <b>مدل سالم است</b>\n<code>{e(model_id)}</code>\n\n"
         except Exception as ex:
             note = f"❌ <b>تست ناموفق</b>\n<code>{e(str(ex)[:300])}</code>\n\n"
+            st["d"].setdefault("failed", set()).add(i)
         return await show_fetched(bot, uid, mid, note)
+    if cmd == "fall":
+        st = STATE.get(uid)
+        if not st or st["s"] != "f_list":
+            return await prov_list(bot, uid, mid)
+        p = db.get_provider(st["d"]["pid"])
+        await show(bot, uid, mid, "🧪 دارم همه مدل‌ها رو تست می‌کنم، چند لحظه صبر کن...")
+        for i, model_id in enumerate(st["d"]["view"]):
+            try:
+                await ai.chat(p, model_id, [{"role": "user", "content": "Reply only: OK"}])
+                st["d"].setdefault("tested", set()).add(i)
+                st["d"].setdefault("failed", set()).discard(i)
+            except Exception:
+                st["d"].setdefault("failed", set()).add(i)
+        return await show_fetched(bot, uid, mid, "✅ تست همه مدل‌ها تمام شد.\n\n")
     if cmd == "fs":
         st = STATE.get(uid)
         if not st or st["s"] != "f_list":
             return await prov_list(bot, uid, mid)
         model_id = st["d"]["view"][int(arg)]
         sec = parts[2]
-        brand = AI_BRANDS[int(parts[3])][0] if len(parts) > 3 else guess_section(model_id)
+        brand = all_brands()[int(parts[3])][0] if len(parts) > 3 else guess_section(model_id)
         if db.model_exists(sec, st["d"]["pid"], model_id):
             note = f"ℹ️ <code>{e(model_id)}</code> قبلا تو {SECTIONS[sec]} بوده.\n\n"
         else:
@@ -984,27 +1038,46 @@ async def admin_cb(bot, uid, mid, d):
         return await models_home(bot, uid, mid)
     if cmd == "ms":
         return await models_sec(bot, uid, mid, arg)
+    if cmd == "msp":
+        return await models_sec(bot, uid, mid, parts[1], page=int(parts[2]))
+    if cmd == "badd":
+        set_state(uid, "brand_name")
+        return await show(bot, uid, mid, "🏷 اسم دکمه هوش مصنوعی جدید رو بفرست.\nمثال: <code>My AI</code>", CANCEL)
+    if cmd == "mf":
+        m = db.get_model(int(arg))
+        if not m:
+            return await models_home(bot, uid, mid)
+        rows = []
+        for i, (brand, icon) in enumerate(all_brands()):
+            rows.append([btn(f"{icon} {brand}", f"ad:mfv:{m['id']}:{i}", "primary")])
+        rows.append([btn("🔙 برگشت", f"ad:mv:{m['id']}")])
+        return await show(bot, uid, mid, "📁 مدل به کدوم پوشه منتقل بشه؟\n\nبا انتقال، از پوشه قبلی حذف میشه.", kb(*rows))
+    if cmd == "mfv":
+        m = db.get_model(int(arg))
+        brand = all_brands()[int(parts[2])][0]
+        db.update_model_brand(m["id"], brand)
+        return await model_view(bot, uid, mid, m["id"], f"✅ مدل به پوشه <b>{e(brand)}</b> منتقل شد.\n\n")
     if cmd == "madd":
         provs = db.list_providers()
         if not provs:
             return await show(bot, uid, mid, "⚠️ اول باید یه سرویس (API Key) اضافه کنی.",
                               kb([btn("➕ افزودن سرویس", "ad:padd", "success")], [btn("🔙 برگشت", f"ad:ms:{arg}")]))
         rows = [[btn(f"{icon} {brand}", f"ad:mb:{arg}:{i}", SEC_STYLE[arg])]
-                for i, (brand, icon) in enumerate(AI_BRANDS)]
+                for i, (brand, icon) in enumerate(all_brands())]
         rows.append([btn("🔙 برگشت", f"ad:ms:{arg}")])
         return await show(bot, uid, mid,
                           f"{SECTIONS[arg]}\n\nاول اسم هوش مصنوعی را انتخاب کن، بعد سرویس و Model ID را می‌گیریم:",
                           kb(*rows))
     if cmd == "mb":
         sec, brand_i = arg, int(parts[2])
-        brand, icon = AI_BRANDS[brand_i]
+        brand, icon = all_brands()[brand_i]
         rows = [[btn(f"🔌 {p['name']}", f"ad:mp:{sec}:{p['id']}:{brand_i}")] for p in db.list_providers()]
         rows.append([btn("🔙 انتخاب هوش مصنوعی", f"ad:madd:{sec}")])
         return await show(bot, uid, mid, f"{icon} <b>{e(brand)}</b>\n\nمدل از کدوم سرویسه؟", kb(*rows))
     if cmd == "mp":
         sec, pid = arg, int(parts[2])
         brand_i = int(parts[3]) if len(parts) > 3 else None
-        brand = AI_BRANDS[brand_i][0] if brand_i is not None else None
+        brand = all_brands()[brand_i][0] if brand_i is not None else None
         set_state(uid, "m_id", sec=sec, pid=pid, brand=brand)
         ex = {"chat": "deepseek-v4-flash:free", "image": "seedream-4-0-250828", "video": "seedance-1-0-pro-250528"}[sec]
         return await show(bot, uid, mid, f"🏷 <b>Model ID</b> مربوط به {e(brand or 'این مدل')} رو دقیق بفرست.\n"
@@ -1131,6 +1204,13 @@ async def admin_input(bot, msg, st):
     if s == "p_name":
         set_state(uid, "p_url", name=text[:40])
         return await bot.send(uid, "🌐 Base URL رو بفرست.\nمثال: <code>https://api.example.com/v1</code>", CANCEL)
+    if s == "brand_name":
+        name = text[:40]
+        if not name:
+            return await bot.send(uid, "⚠️ اسم خالیه، دوباره بفرست.", CANCEL)
+        db.add_brand(name, "🤖")
+        clear_state(uid)
+        return await models_home(bot, uid, None)
     if s == "p_url":
         parsed = urlparse(text.strip())
         host = (parsed.hostname or "").lower()
@@ -1168,12 +1248,12 @@ async def admin_input(bot, msg, st):
         return await prov_view(bot, uid, None, d["pid"], "🌐 آدرس عوض شد.\n\n")
     if s == "m_id":
         set_state(uid, "m_title", model_id=text)
-        brand_icon = next((icon for name, icon in AI_BRANDS if name == d.get("brand")), "🤖")
+        brand_icon = next((icon for name, icon in all_brands() if name == d.get("brand")), "🤖")
         default_title = f"{brand_icon} {d.get('brand')}" if d.get("brand") else text
         return await bot.send(uid, f"✏️ اسم نمایشی مدل رو بفرست (پیشنهاد: <code>{e(default_title)}</code>)\n"
                                    f"یا <code>-</code> بفرست تا اسم پیشنهادی ثبت بشه.", CANCEL)
     if s == "m_title":
-        title = (f"{next((icon for name, icon in AI_BRANDS if name == d.get('brand')), '🤖')} {d['brand']}"
+        title = (f"{next((icon for name, icon in all_brands() if name == d.get('brand')), '🤖')} {d['brand']}"
                   if text == "-" and d.get("brand") else (d["model_id"] if text == "-" else text[:60]))
         mid_ = db.add_model(d["sec"], d["pid"], d["model_id"], title, d.get("brand"))
         return await model_view(bot, uid, None, mid_, "✅ مدل اضافه شد.\n\n")

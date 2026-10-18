@@ -33,6 +33,8 @@ with _lock:
     CREATE TABLE IF NOT EXISTS models(
         id INTEGER PRIMARY KEY AUTOINCREMENT, section TEXT, provider_id INTEGER,
         model_id TEXT, title TEXT, brand TEXT, enabled INTEGER DEFAULT 1, is_default INTEGER DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS ai_brands(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, icon TEXT DEFAULT '🤖');
     CREATE TABLE IF NOT EXISTS users(
         id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, status TEXT,
         joined INTEGER, last_seen INTEGER);
@@ -117,6 +119,18 @@ def list_models(section, enabled_only=False):
     if enabled_only:
         sql += "AND m.enabled=1 AND p.enabled=1 "
     return _q(sql + "ORDER BY m.is_default DESC, m.id", (section,))
+
+
+def list_brands():
+    return _q("SELECT * FROM ai_brands ORDER BY id")
+
+
+def add_brand(name, icon="🤖"):
+    return _ex("INSERT OR IGNORE INTO ai_brands(name,icon) VALUES(?,?)", (name.strip()[:40], icon.strip()[:4] or "🤖"))
+
+
+def update_model_brand(mid, brand):
+    _ex("UPDATE models SET brand=? WHERE id=?", (brand, mid))
 
 
 def get_model(mid):
