@@ -328,15 +328,34 @@ async def pick_model(bot, uid, sec, mid):
 
 
 async def brand_models(bot, uid, sec, brand, mid):
+    return await brand_models_page(bot, uid, sec, brand, mid, 0)
+
+
+async def brand_models_page(bot, uid, sec, brand, mid, page=0):
     models = [m for m in db.list_models(sec, enabled_only=True)
               if brand_for_model(m) == brand]
     icon = next((i for n, i in AI_BRANDS if n == brand), "🤖")
     rows = []
     cur = current_model(uid, sec)
-    for m in models:
-        mark = "✅ " if cur and cur["id"] == m["id"] else ""
-        rows.append([btn(f"{mark}{icon} {m['title']}", f"sel:{m['id']}",
-                         "success" if mark else "primary")])
+    per_page = 8
+    pages = max(1, (len(models) + per_page - 1) // per_page)
+    page = max(0, min(page, pages - 1))
+    shown = models[page * per_page:(page + 1) * per_page]
+    for i in range(0, len(shown), 2):
+        pair = []
+        for m in shown[i:i + 2]:
+            mark = "✅ " if cur and cur["id"] == m["id"] else ""
+            pair.append(btn(f"{mark}{icon} {m['title']}", f"sel:{m['id']}",
+                            "success" if mark else "primary"))
+        rows.append(pair[::-1] if ((i // 2) % 2) else pair)
+    nav = []
+    if page > 0:
+        nav.append(btn("⬅️ قبلی", f"brandp:{sec}:{brand}:{page - 1}"))
+    nav.append(btn(f"📄 {page + 1}/{pages}", "noop"))
+    if page < pages - 1:
+        nav.append(btn("بعدی ➡️", f"brandp:{sec}:{brand}:{page + 1}"))
+    if nav:
+        rows.append(nav)
     rows.append([btn("🔙 برگشت به هوش‌های مصنوعی", f"pick:{sec}")])
     text = f"{icon} <b>{e(brand)}</b>\n\n"
     if models:
@@ -441,11 +460,16 @@ async def on_callback(bot, cq):
         return await account(bot, uid, mid)
     if data == "m:help":
         return await show(bot, uid, mid, HELP, kb(HOME))
+    if data == "noop":
+        return
     if data == "m:newchat":
         HISTORY.pop(uid, None)
         return await open_section(bot, uid, "chat", mid, note="🧹 حافظه چت پاک شد.\n\n")
     if data.startswith("pick:"):
         return await pick_model(bot, uid, data[5:], mid)
+    if data.startswith("brandp:"):
+        _, sec, brand, page = data.split(":", 3)
+        return await brand_models_page(bot, uid, sec, brand, mid, int(page))
     if data.startswith("brand:"):
         _, sec, brand = data.split(":", 2)
         return await brand_models(bot, uid, sec, brand, mid)
