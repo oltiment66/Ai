@@ -22,6 +22,16 @@ def _url(p, path):
     return p["base_url"].rstrip("/") + path
 
 
+def _kind(p):
+    """Honor the saved kind, but also repair older providers by hostname."""
+    host = (urlparse(p.get("base_url", "")).hostname or "").lower()
+    if "runwayml.com" in host:
+        return "runway"
+    if "cloudflare.com" in host:
+        return "cloudflare"
+    return p.get("kind", "openai")
+
+
 def _headers(p):
     h = {"Authorization": f"Bearer {p['api_key']}", "Content-Type": "application/json"}
     if p.get("kind") == "runway":
@@ -65,8 +75,12 @@ async def _request(method, p, path, body=None, raw=False):
 
 
 async def list_models(p):
-    if p.get("kind") in ("runway", "cloudflare"):
-        raise AIError("این سرویس فهرست مدل خودکار ندارد؛ Model ID را دستی اضافه کن.")
+    if _kind(p) == "runway":
+        # Runway has no /models endpoint. Expose its documented model IDs so
+        # the existing model picker and test flow work without a new wizard.
+        return ["gen4_image_turbo", "gen4.5", "aleph2"]
+    if _kind(p) == "cloudflare":
+        raise AIError("Cloudflare فهرست مدل خودکار ندارد؛ Model ID مثل @cf/... را دستی اضافه کن.")
     j = await _request("GET", p, "/models")
     data = j.get("data", j) if isinstance(j, dict) else j
     ids = []
@@ -84,7 +98,7 @@ def _content_text(content):
 
 
 async def chat(p, model, messages):
-    if p.get("kind") == "cloudflare":
+    if _kind(p) == "cloudflare":
         j = await _request("POST", p, f"/{model.lstrip('/')}", {"messages": messages})
         result = j.get("result", j) if isinstance(j, dict) else j
         text = result.get("response", result.get("text", "")) if isinstance(result, dict) else str(result)
@@ -121,7 +135,7 @@ def _data_url_to_bytes(u):
 
 
 async def image(p, model, prompt, size="auto"):
-    if p.get("kind") == "runway":
+    if _kind(p) == "runway":
         j = await _request("POST", p, "/text_to_image", {
             "promptText": prompt, "ratio": "1024:1024", "model": model})
         return await _runway_result(p, j, "image")
@@ -165,7 +179,7 @@ async def image(p, model, prompt, size="auto"):
 
 async def video(p, model, prompt, params="", progress=None, max_wait=900):
     start = time.time()
-    if p.get("kind") == "runway":
+    if _kind(p) == "runway":
         # Runway's image_to_video requires a prompt image. Generate one through
         # the same provider first, then use its returned URI as the keyframe.
         imgs = await image(p, "gen4_image_turbo", prompt)
