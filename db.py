@@ -121,6 +121,12 @@ def list_models(section, enabled_only=False):
     return _q(sql + "ORDER BY m.is_default DESC, m.id", (section,))
 
 
+def assigned_model_ids(provider_id):
+    """Model IDs already placed in at least one AI folder for this provider."""
+    rows = _q("SELECT DISTINCT model_id FROM models WHERE provider_id=?", (provider_id,))
+    return {r["model_id"] for r in rows}
+
+
 def list_brands():
     return _q("SELECT * FROM ai_brands ORDER BY id")
 

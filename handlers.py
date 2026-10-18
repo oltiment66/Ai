@@ -706,12 +706,14 @@ def fetched_kb(d):
     pages = max(1, (len(view) + per - 1) // per)
     page = min(page, pages - 1)
     rows = []
+    assigned = db.assigned_model_ids(d["pid"])
     for i in range(page * per, min(len(view), (page + 1) * per)):
         mid_ = view[i]
         ok = i in d.get("tested", set())
         bad = i in d.get("failed", set())
         mark = "✅ " if ok else ("❌ " if bad else "")
-        rows.append([btn(f"{mark}{SEC_ICON[guess_section(mid_)]} {mid_[:50]}", f"ad:fa:{i}")])
+        folder_mark = "📌 " if mid_ in assigned else ""
+        rows.append([btn(f"{folder_mark}{mark}{SEC_ICON[guess_section(mid_)]} {mid_[:50]}", f"ad:fa:{i}")])
         rows.append([btn("🧪 تست مدل" if not ok else "✅ تست موفق", f"ad:ft:{i}",
                          "success" if ok else "primary")])
     nav = []
@@ -731,7 +733,7 @@ async def show_fetched(bot, uid, mid, note=""):
     flt = d.get("filter")
     txt = (f"{note}📥 <b>مدل‌های موجود</b> ({len(d['view'])} مورد{' | 🔍 ' + e(flt) if flt else ''})\n\n"
            "روی هر مدل بزن تا به یه بخش اضافه بشه.\n🔍 برای جستجو، اسم مدل رو تایپ کن و بفرست (مثلا <code>free</code> یا <code>seedream</code>).\n\n"
-           "💬 چت | 🎨 عکس | 🎬 ویدیو (حدس خودکار)")
+           "📌 داخل پوشه هوش مصنوعی | 💬 چت | 🎨 عکس | 🎬 ویدیو (حدس خودکار)")
     await show(bot, uid, mid, txt, fetched_kb(d))
 
 
