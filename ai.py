@@ -1,7 +1,7 @@
 """AI provider adapters.
-The original OpenAI-compatible and BytePlus paths stay intact. Extra adapters
-are intentionally opt-in per provider: Runway and Cloudflare use their native
-payloads instead of pretending to be OpenAI-compatible.
+
+OpenAI-compatible providers are intentionally URL-agnostic: a custom service
+may expose its API at the root, under /v1, or behind another path.
 """
 import asyncio
 import base64
@@ -22,14 +22,21 @@ def _url(p, path):
     return p["base_url"].rstrip("/") + path
 
 
-def _kind(p):
-    """Honor the saved kind, but also repair older providers by hostname."""
-    host = (urlparse(p.get("base_url", "")).hostname or "").lower()
-    if "runwayml.com" in host:
-        return "runway"
-    if "cloudflare.com" in host:
-        return "cloudflare"
-    return p.get("kind", "openai")
+def _candidate_urls(p, path):
+    """Return the configured endpoint first, then the common /v1 variant.
+
+    This keeps existing providers untouched while allowing token endpoints
+    that were copied without the /v1 suffix.
+    """
+    base = p["base_url"].rstrip("/")
+    first = base + path
+    yield first
+    parsed = urlparse(base)
+    clean_path = parsed.path.rstrip("/")
+    if not clean_path.endswith("/v1") and not clean_path.endswith(path.rstrip("/")):
+        v1 = base + "/v1" + path
+        if v1 != first:
+            yield v1
 
 
 def _headers(p):
@@ -52,12 +59,19 @@ def _err(r):
 async def _request(method, p, path, body=None, raw=False):
     last = None
     for attempt in range(3):
+        r = None
         try:
             async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as c:
-                r = await c.request(method, _url(p, path), headers=_headers(p), json=body)
+                for endpoint in _candidate_urls(p, path):
+                    r = await c.request(method, endpoint, headers=_headers(p), json=body)
+                    if r.status_code != 404:
+                        break
         except httpx.HTTPError as e:
             last = AIError(f"خطای اتصال: {type(e).__name__}")
             await asyncio.sleep(2 * (attempt + 1))
+            continue
+        if r is None:
+            last = AIError("پاسخ خالی از سرویس")
             continue
         if r.status_code in RETRY_CODES and attempt < 2:
             last = _err(r)
@@ -75,12 +89,8 @@ async def _request(method, p, path, body=None, raw=False):
 
 
 async def list_models(p):
-    if _kind(p) == "runway":
-        # Runway has no /models endpoint. Expose its documented model IDs so
-        # the existing model picker and test flow work without a new wizard.
-        return ["gen4_image_turbo", "gen4.5", "aleph2"]
-    if _kind(p) == "cloudflare":
-        raise AIError("Cloudflare فهرست مدل خودکار ندارد؛ Model ID مثل @cf/... را دستی اضافه کن.")
+    if p.get("kind") in ("runway", "cloudflare"):
+        raise AIError("این سرویس فهرست مدل خودکار ندارد؛ Model ID را دستی اضافه کن.")
     j = await _request("GET", p, "/models")
     data = j.get("data", j) if isinstance(j, dict) else j
     ids = []
@@ -98,7 +108,7 @@ def _content_text(content):
 
 
 async def chat(p, model, messages):
-    if _kind(p) == "cloudflare":
+    if p.get("kind") == "cloudflare":
         j = await _request("POST", p, f"/{model.lstrip('/')}", {"messages": messages})
         result = j.get("result", j) if isinstance(j, dict) else j
         text = result.get("response", result.get("text", "")) if isinstance(result, dict) else str(result)
@@ -135,7 +145,7 @@ def _data_url_to_bytes(u):
 
 
 async def image(p, model, prompt, size="auto"):
-    if _kind(p) == "runway":
+    if p.get("kind") == "runway":
         j = await _request("POST", p, "/text_to_image", {
             "promptText": prompt, "ratio": "1024:1024", "model": model})
         return await _runway_result(p, j, "image")
@@ -179,7 +189,7 @@ async def image(p, model, prompt, size="auto"):
 
 async def video(p, model, prompt, params="", progress=None, max_wait=900):
     start = time.time()
-    if _kind(p) == "runway":
+    if p.get("kind") == "runway":
         # Runway's image_to_video requires a prompt image. Generate one through
         # the same provider first, then use its returned URI as the keyframe.
         imgs = await image(p, "gen4_image_turbo", prompt)

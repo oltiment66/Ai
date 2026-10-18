@@ -61,8 +61,6 @@ PRESETS = {
     "together": ("Together AI", "openai", "https://api.together.xyz/v1", []),
     "mistral": ("Mistral", "openai", "https://api.mistral.ai/v1", []),
     "xai": ("xAI Grok", "openai", "https://api.x.ai/v1", []),
-    "runway": ("Runway", "runway", "https://api.dev.runwayml.com/v1", []),
-    "cloudflare": ("Cloudflare Workers AI", "cloudflare", "https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/run", []),
 }
 
 STATE = {}        # uid -> {"s": state, "d": data}   (admin wizards)
@@ -174,11 +172,7 @@ class KeepAction:
 
 
 def provider_of(m):
-    url = m["p_url"].rstrip("/")
-    host = (urlparse(url).hostname or "").lower()
-    if "runwayml.com" in host:
-        url = "https://api.dev.runwayml.com/v1"
-    return {"kind": m["p_kind"], "base_url": url, "api_key": m["p_key"]}
+    return {"kind": m["p_kind"], "base_url": m["p_url"], "api_key": m["p_key"]}
 
 
 def current_model(uid, sec):
@@ -1140,19 +1134,12 @@ async def admin_input(bot, msg, st):
     if s == "p_url":
         parsed = urlparse(text.strip())
         host = (parsed.hostname or "").lower()
-        if parsed.scheme != "https" or not host or host in {"localhost", "127.0.0.1"}:
-            return await bot.send(uid, "⚠️ فقط Base URL معتبر HTTPS بفرست؛ مثل https://api.unorouter.com/v1", CANCEL)
-        # Users may paste a full endpoint from the provider docs. Store only
-        # the API root so adapters do not append a second endpoint path.
-        clean_url = text.strip().rstrip("/")
-        if "runwayml.com" in host:
-            clean_url = "https://api.dev.runwayml.com/v1"
-        set_state(uid, "p_kind", url=clean_url)
+        if parsed.scheme not in {"http", "https"} or not host:
+            return await bot.send(uid, "⚠️ لینک Base URL معتبر HTTP/HTTPS بفرست؛ مثل https://api.example.com یا https://api.example.com/v1", CANCEL)
+        set_state(uid, "p_kind", url=text)
         return await bot.send(uid, "📡 نوع API؟", kb(
-            [btn("🔵 OpenAI-compatible (بیشتر سرویس‌ها)", "ad:pk:openai", "primary")],
+            [btn("🔵 OpenAI-compatible (هر Base URL و توکن)", "ad:pk:openai", "primary")],
             [btn("🟣 BytePlus ModelArk", "ad:pk:byteplus")],
-            [btn("🎬 Runway Native API", "ad:pk:runway")],
-            [btn("☁️ Cloudflare Workers AI", "ad:pk:cloudflare")],
             [btn("❌ لغو", "ad:cancel", "danger")]))
     if s == "p_key":
         await bot.delete(uid, msg["message_id"])
