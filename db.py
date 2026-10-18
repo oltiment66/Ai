@@ -32,7 +32,7 @@ with _lock:
         api_key TEXT, enabled INTEGER DEFAULT 1, created INTEGER);
     CREATE TABLE IF NOT EXISTS models(
         id INTEGER PRIMARY KEY AUTOINCREMENT, section TEXT, provider_id INTEGER,
-        model_id TEXT, title TEXT, enabled INTEGER DEFAULT 1, is_default INTEGER DEFAULT 0);
+        model_id TEXT, title TEXT, brand TEXT, enabled INTEGER DEFAULT 1, is_default INTEGER DEFAULT 0);
     CREATE TABLE IF NOT EXISTS users(
         id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, status TEXT,
         joined INTEGER, last_seen INTEGER);
@@ -43,6 +43,9 @@ with _lock:
         model TEXT, ok INTEGER, day TEXT, ts INTEGER);
     CREATE INDEX IF NOT EXISTS usage_day ON usage(day, user_id, section);
     """)
+    cols = {r[1] for r in _conn.execute("PRAGMA table_info(models)").fetchall()}
+    if "brand" not in cols:
+        _conn.execute("ALTER TABLE models ADD COLUMN brand TEXT")
     _conn.commit()
 
 
@@ -125,15 +128,15 @@ def model_exists(section, pid, model_id):
                (section, pid, model_id)) is not None
 
 
-def add_model(section, pid, model_id, title):
+def add_model(section, pid, model_id, title, brand=None):
     has_default = _q1("SELECT id FROM models WHERE section=? AND is_default=1", (section,))
-    return _ex("INSERT INTO models(section,provider_id,model_id,title,enabled,is_default) VALUES(?,?,?,?,1,?)",
-               (section, pid, model_id, title, 0 if has_default else 1))
+    return _ex("INSERT INTO models(section,provider_id,model_id,title,brand,enabled,is_default) VALUES(?,?,?,?,?,1,?)",
+               (section, pid, model_id, title, brand, 0 if has_default else 1))
 
 
 def update_model(mid, **f):
     for k, v in f.items():
-        if k in ("title", "model_id", "enabled"):
+        if k in ("title", "model_id", "brand", "enabled"):
             _ex(f"UPDATE models SET {k}=? WHERE id=?", (v, mid))
 
 

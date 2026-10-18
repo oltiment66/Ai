@@ -21,7 +21,7 @@ SEC_STYLE = {"chat": "primary", "image": "success", "video": "danger"}
 # Friendly names shown in the model picker. They are labels, not fake providers:
 # a name becomes usable after the admin connects a matching model/API.
 AI_BRANDS = [
-    ("ChatGPT", "🤖"),
+    ("Chatgpt", "🤖"),
     ("Claude", "🟠"),
     ("Command", "🟣"),
     ("Gemini", "♊"),
@@ -29,7 +29,8 @@ AI_BRANDS = [
     ("ParsiGPT", "🇮🇷"),
     ("DeepSeek", "🐋"),
     ("LLaMA", "🦙"),
-    ("NVIDIA AI", "🟢"),
+    ("NVIDIA", "🟢"),
+    ("Ai", "🔵"),
     ("Plugsky", "⚡"),
     ("Qwen3", "🟣"),
     ("Ornith", "🦜"),
@@ -188,9 +189,11 @@ def current_model(uid, sec):
 
 
 def brand_for_model(m):
+    if m.get("brand"):
+        return m["brand"]
     hay = f"{m.get('title', '')} {m.get('model_id', '')}".lower()
     aliases = {
-        "ChatGPT": ("chatgpt", "gpt-"),
+        "Chatgpt": ("chatgpt", "gpt-"),
         "Claude": ("claude",),
         "Command": ("command", "cohere"),
         "Gemini": ("gemini",),
@@ -198,7 +201,8 @@ def brand_for_model(m):
         "ParsiGPT": ("parsigpt", "parsi"),
         "DeepSeek": ("deepseek",),
         "LLaMA": ("llama", "meta-llama"),
-        "NVIDIA AI": ("nvidia", "nemotron"),
+        "NVIDIA": ("nvidia", "nemotron"),
+        "Ai": (" ai ", "artificial-intelligence"),
         "Plugsky": ("plugsky",),
         "Qwen3": ("qwen",),
         "Ornith": ("ornith",),
@@ -646,7 +650,11 @@ def fetched_kb(d):
     rows = []
     for i in range(page * per, min(len(view), (page + 1) * per)):
         mid_ = view[i]
-        rows.append([btn(f"{SEC_ICON[guess_section(mid_)]} {mid_[:50]}", f"ad:fa:{i}")])
+        ok = i in d.get("tested", set())
+        mark = "✅ " if ok else ""
+        rows.append([btn(f"{mark}{SEC_ICON[guess_section(mid_)]} {mid_[:50]}", f"ad:fa:{i}")])
+        rows.append([btn("🧪 تست مدل" if not ok else "✅ تست موفق", f"ad:ft:{i}",
+                         "success" if ok else "primary")])
     nav = []
     if page > 0:
         nav.append(btn("⬅️ قبلی", f"ad:fp:{page - 1}"))
@@ -877,7 +885,7 @@ async def admin_cb(bot, uid, mid, d):
         if not ids:
             return await prov_view(bot, uid, mid, int(arg), "⚠️ لیست خالی بود.\n\n")
         clear_state(uid)
-        set_state(uid, "f_list", pid=int(arg), all=ids, view=ids, page=0, filter=None)
+        set_state(uid, "f_list", pid=int(arg), all=ids, view=ids, page=0, filter=None, tested=set())
         return await show_fetched(bot, uid, mid)
     if cmd == "fp":
         if not STATE.get(uid) or STATE[uid]["s"] != "f_list":
@@ -889,20 +897,51 @@ async def admin_cb(bot, uid, mid, d):
         if not st or st["s"] != "f_list":
             return await prov_list(bot, uid, mid)
         model_id = st["d"]["view"][int(arg)]
-        g = guess_section(model_id)
-        rows = [[btn(("👉 " if s == g else "") + SECTIONS[s], f"ad:fs:{arg}:{s}", SEC_STYLE[s])] for s in SECTIONS]
+        rows = [[btn(f"{icon} {brand}", f"ad:fb:{arg}:{i}", "primary")]
+                for i, (brand, icon) in enumerate(AI_BRANDS)]
         rows.append([btn("🔙 برگشت به لیست", f"ad:fp:{st['d'].get('page', 0)}")])
-        return await show(bot, uid, mid, f"🏷 <code>{e(model_id)}</code>\n\nبه کدوم بخش اضافه بشه؟", kb(*rows))
+        return await show(bot, uid, mid, f"🏷 <code>{e(model_id)}</code>\n\n"
+                                         "این مدل زیر کدوم دکمه هوش مصنوعی قرار بگیره؟", kb(*rows))
+    if cmd == "fb":
+        st = STATE.get(uid)
+        if not st or st["s"] != "f_list":
+            return await prov_list(bot, uid, mid)
+        model_id = st["d"]["view"][int(arg)]
+        brand_i = int(parts[2])
+        rows = [[btn(("👉 " if s == guess_section(model_id) else "") + SECTIONS[s],
+                     f"ad:fs:{arg}:{s}:{brand_i}", SEC_STYLE[s])] for s in SECTIONS]
+        rows.append([btn("🔙 انتخاب هوش مصنوعی", f"ad:fa:{arg}")])
+        return await show(bot, uid, mid, f"🏷 <code>{e(model_id)}</code>\n\n"
+                                         f"هوش مصنوعی: <b>{e(AI_BRANDS[brand_i][0])}</b>\n\n"
+                                         "مدل در کدوم بخش هم فعال بشه؟", kb(*rows))
+    if cmd == "ft":
+        st = STATE.get(uid)
+        if not st or st["s"] != "f_list":
+            return await prov_list(bot, uid, mid)
+        i = int(arg)
+        model_id = st["d"]["view"][i]
+        p = db.get_provider(st["d"]["pid"])
+        await show(bot, uid, mid, f"🧪 در حال تست <code>{e(model_id)}</code>...")
+        try:
+            # Safe smoke test: it checks the model through the provider's
+            # OpenAI-compatible chat endpoint and does not generate media.
+            await ai.chat(p, model_id, [{"role": "user", "content": "Reply only: OK"}])
+            st["d"].setdefault("tested", set()).add(i)
+            note = f"✅ <b>مدل سالم است</b>\n<code>{e(model_id)}</code>\n\n"
+        except Exception as ex:
+            note = f"❌ <b>تست ناموفق</b>\n<code>{e(str(ex)[:300])}</code>\n\n"
+        return await show_fetched(bot, uid, mid, note)
     if cmd == "fs":
         st = STATE.get(uid)
         if not st or st["s"] != "f_list":
             return await prov_list(bot, uid, mid)
         model_id = st["d"]["view"][int(arg)]
         sec = parts[2]
+        brand = AI_BRANDS[int(parts[3])][0] if len(parts) > 3 else guess_section(model_id)
         if db.model_exists(sec, st["d"]["pid"], model_id):
             note = f"ℹ️ <code>{e(model_id)}</code> قبلا تو {SECTIONS[sec]} بوده.\n\n"
         else:
-            db.add_model(sec, st["d"]["pid"], model_id, model_id)
+            db.add_model(sec, st["d"]["pid"], model_id, model_id, brand)
             note = f"✅ <code>{e(model_id)}</code> به {SECTIONS[sec]} اضافه شد.\n\n"
         return await show_fetched(bot, uid, mid, note)
 
@@ -1099,7 +1138,7 @@ async def admin_input(bot, msg, st):
     if s == "m_title":
         title = (f"{next((icon for name, icon in AI_BRANDS if name == d.get('brand')), '🤖')} {d['brand']}"
                   if text == "-" and d.get("brand") else (d["model_id"] if text == "-" else text[:60]))
-        mid_ = db.add_model(d["sec"], d["pid"], d["model_id"], title)
+        mid_ = db.add_model(d["sec"], d["pid"], d["model_id"], title, d.get("brand"))
         return await model_view(bot, uid, None, mid_, "✅ مدل اضافه شد.\n\n")
     if s == "m_ren":
         db.update_model(d["id"], title=text[:60])
