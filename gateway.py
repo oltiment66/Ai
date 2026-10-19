@@ -9,8 +9,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self): self.proxy() if self.path.startswith('/api/') or self.path=='/health' else self.static()
  def do_POST(self): self.proxy()
  def proxy(self):
-  n=int(self.headers.get('Content-Length','0')); body=self.rfile.read(n) if n else None
-  headers={k:v for k,v in self.headers.items() if k.lower() not in ('host','content-length')}
+  n=int(self.headers.get('Content-Length','0')); body=self.rfile.read(n) if n else None; headers={k:v for k,v in self.headers.items() if k.lower() not in ('host','content-length')}
   try:
    req=urllib.request.Request(f'http://127.0.0.1:{BOT_PORT}{self.path}',data=body,headers=headers,method=self.command)
    with urllib.request.urlopen(req,timeout=120) as r:
