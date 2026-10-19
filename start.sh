@@ -5,4 +5,4 @@ export PORT=8081
 python bot/main.py &
 bot_pid=$!
 trap 'kill "$bot_pid" 2>/dev/null || true' EXIT INT TERM
-PORT="$public_port" exec python gateway.py
+PORT="$public_port" python gateway.py
