@@ -7,7 +7,7 @@ import hashlib
 import hmac
 import json
 import time
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, unquote
 
 import ai
 import db
@@ -21,6 +21,7 @@ def _json(data):
 def _valid_init_data(raw):
     if not raw or not BOT_TOKEN:
         return None
+    raw = unquote(raw) if "%" in raw and "&" not in raw else raw
     pairs = dict(parse_qsl(raw, keep_blank_values=True))
     received = pairs.pop("hash", "")
     if not received:
@@ -77,7 +78,8 @@ async def _read(reader):
 async def _handle(reader, writer):
     try:
         method, path, headers, body = await _read(reader)
-        user = _safe_user(headers.get("X-Telegram-Init-Data", ""))
+        init_data = headers.get("X-Telegram-Init-Data", "") or headers.get("X-Telegram-InitData", "")
+        user = _safe_user(init_data)
         if method == 'OPTIONS':
             status, out = 200, {'ok': True}
         elif path == "/health":
