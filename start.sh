@@ -1,11 +1,8 @@
 #!/bin/sh
 set -eu
-PUBLIC_PORT="${PORT:-8080}"
-export PUBLIC_PORT
-export BOT_PORT=8081
+public_port="${PORT:-8080}"
 export PORT=8081
 python bot/main.py &
-BOT_PID=$!
-trap 'kill "$BOT_PID" 2>/dev/null || true' EXIT INT TERM
-sleep 1
-exec python gateway.py
+bot_pid=$!
+trap 'kill "$bot_pid" 2>/dev/null || true' EXIT INT TERM
+PORT="$public_port" exec python gateway.py
