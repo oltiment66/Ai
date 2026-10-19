@@ -77,7 +77,8 @@ async def _read(reader):
 async def _handle(reader, writer):
     try:
         method, path, headers, body = await _read(reader)
-        user = _safe_user(headers.get("X-Telegram-Init-Data", ""))
+        init_data = headers.get("X-Telegram-Init-Data", "") or headers.get("X-Telegram-InitData", "")
+        user = _safe_user(init_data)
         if method == 'OPTIONS':
             status, out = 200, {'ok': True}
         elif path == "/health":
