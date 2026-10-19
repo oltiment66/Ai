@@ -272,6 +272,7 @@ async def notify_admins_pending(bot, u):
 # ======================= main menu =======================
 def main_kb(uid):
     rows = [
+        *([[btn("🚀 باز کردن Mini App", web_app=MINI_APP_URL, style="primary")]] if MINI_APP_URL else []),
         [btn(SECTIONS["chat"], "m:chat", "primary")],
         [btn(SECTIONS["image"], "m:image", "success"), btn(SECTIONS["video"], "m:video", "danger")],
         [btn("👤 حساب من", "m:me"), btn("ℹ️ راهنما", "m:help")],
